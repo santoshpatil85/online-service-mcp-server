@@ -1,0 +1,51 @@
+# .dockerignore - Exclude unnecessary files from Docker build
+
+# Version control
+.git/
+.gitignore
+.github/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Testing
+tests/
+.pytest_cache/
+.tox/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation
+docs/
+*.md
+README.md
+ARCHITECTURE.md
+
+# CI/CD
+.gitlab-ci.yml
+.github/
+
+# Other
+.env
+.env.local
+*.log
+node_modules/

@@ -1,0 +1,70 @@
+# Default values for MCP Client Helm Chart
+
+replicaCount: 1
+
+image:
+  repository: "registry.example.com/mcp-client"
+  pullPolicy: IfNotPresent
+  tag: "1.0.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations:
+    azure.workload.identity/use: "true"
+  name: "mcp-client"
+
+azure:
+  tenantId: ""
+  clientId: ""
+  authorityHost: "https://login.microsoftonline.com"
+
+podAnnotations:
+  azure.workload.identity/use: "true"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 75
+
+app:
+  debug: false
+  logLevel: "INFO"
+  mcpServerUrl: "http://mcp-server:8000"
+  requestTimeout: 30
+  discoveryTimeout: 10
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+labels:
+  app: mcp-client
+  version: "1.0.0"

@@ -1,0 +1,139 @@
+# Default values for MCP Server Helm Chart
+
+# Replica configuration
+replicaCount: 2
+
+# Image configuration
+image:
+  repository: "registry.example.com/mcp-server"
+  pullPolicy: IfNotPresent
+  tag: "1.0.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Service Account (MANDATORY for Azure Workload Identity)
+serviceAccount:
+  create: true
+  annotations:
+    azure.workload.identity/use: "true"
+  name: "mcp-server"
+
+# Azure Identity Configuration (Workload Identity)
+azure:
+  tenantId: ""  # e.g., "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  clientId: ""  # UAMI client ID
+  authorityHost: "https://login.microsoftonline.com"
+  # OAuth scopes for downstream services
+  scopes:
+    - "https://management.azure.com/.default"
+
+# Pod Annotations
+podAnnotations:
+  azure.workload.identity/use: "true"
+
+# Pod Security Context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container Security Context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8000
+  targetPort: 8000
+  annotations: {}
+
+# Ingress configuration (optional)
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+  hosts:
+    - host: mcp-server.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Resource requests and limits
+resources:
+  requests:
+    cpu: "200m"
+    memory: "256Mi"
+  limits:
+    cpu: "1000m"
+    memory: "1Gi"
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 85
+
+# Probes configuration
+probes:
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Application configuration
+app:
+  debug: false
+  logLevel: "INFO"
+  backendApiUrl: "https://api.example.com"
+  backendApiTimeout: 10
+  readinessCheckBackend: true
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - mcp-server
+          topologyKey: kubernetes.io/hostname
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Labels
+labels:
+  app: mcp-server
+  version: "1.0.0"
+  managed-by: helm
