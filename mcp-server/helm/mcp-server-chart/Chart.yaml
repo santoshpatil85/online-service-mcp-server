@@ -10,7 +10,7 @@ keywords:
   - model-context-protocol
   - azure
   - workload-identity
-  - fastapi
+  - fastmcp
 
 maintainers:
   - name: Engineering Team

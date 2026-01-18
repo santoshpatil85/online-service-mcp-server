@@ -55,10 +55,10 @@ USER mcpserver
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/health/live', timeout=3.0)"
+    CMD python -c "import httpx; httpx.get('http://localhost:3333/health', timeout=3.0)"
 
 # Expose port
-EXPOSE 8000
+EXPOSE 3333
 
 # Run the application
-CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "src.main"]

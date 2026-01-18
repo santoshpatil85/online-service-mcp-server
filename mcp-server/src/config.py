@@ -23,7 +23,7 @@ class ServerSettings(BaseSettings):
     """FastMCP Server settings."""
 
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 3333
     debug: bool = False
     log_level: str = "INFO"
     

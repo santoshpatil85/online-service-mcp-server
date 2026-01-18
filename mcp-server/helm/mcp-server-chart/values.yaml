@@ -53,8 +53,8 @@ securityContext:
 # Service configuration
 service:
   type: ClusterIP
-  port: 8000
-  targetPort: 8000
+  port: 3333
+  targetPort: 3333
   annotations: {}
 
 # Ingress configuration (optional)

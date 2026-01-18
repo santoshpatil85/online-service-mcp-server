@@ -1,9 +1,9 @@
-"""MCP Client for communicating with MCP Server."""
-import json
+"""MCP Client for communicating with MCP Server using FastMCP."""
 import logging
 from typing import Any, Optional
 
-import httpx
+from mcp import ClientSession
+from mcp.client.http import HTTPClientTransport
 
 from src.config import get_logger, settings
 
@@ -11,7 +11,7 @@ logger = get_logger(__name__)
 
 
 class MCPClient:
-    """HTTP client for MCP Server."""
+    """FastMCP client for MCP Server."""
 
     def __init__(self, server_url: Optional[str] = None) -> None:
         """
@@ -21,17 +21,17 @@ class MCPClient:
             server_url: Optional MCP Server URL (defaults to config).
         """
         self.server_url = server_url or settings.client.mcp_server_url
-        self._client: Optional[httpx.AsyncClient] = None
-        self._tools_cache: Optional[dict[str, Any]] = None
+        self._session: Optional[ClientSession] = None
+        self._tools_cache: Optional[list[dict[str, Any]]] = None
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                timeout=settings.client.request_timeout,
-                headers={"User-Agent": "mcp-client/1.0"},
-            )
-        return self._client
+    async def _get_session(self) -> ClientSession:
+        """Get or create MCP client session."""
+        if self._session is None:
+            # Use HTTP transport for communication with FastMCP Server
+            transport = HTTPClientTransport(self.server_url)
+            self._session = ClientSession(transport)
+            await self._session.initialize()
+        return self._session
 
     async def discover_tools(self) -> list[dict[str, Any]]:
         """
@@ -45,30 +45,30 @@ class MCPClient:
         """
         try:
             logger.info(f"Discovering tools from {self.server_url}")
-            client = await self._get_client()
+            session = await self._get_session()
             
-            # MCP tools are discovered via introspection endpoint
-            # In a real implementation, this would use the MCP protocol
-            # For now, we'll use a discovery endpoint
-            response = await client.get(
-                f"{self.server_url}/_mcp/tools",
-                timeout=settings.client.discovery_timeout,
-            )
-            response.raise_for_status()
+            # List available tools using MCP protocol
+            response = await session.list_tools()
             
-            tools = response.json()
-            logger.info(f"Discovered {len(tools.get('tools', []))} tools")
-            self._tools_cache = tools
-            return tools.get("tools", [])
+            tools_list = []
+            if hasattr(response, 'tools') and response.tools:
+                for tool in response.tools:
+                    tool_info = {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "input_schema": tool.inputSchema if hasattr(tool, 'inputSchema') else {},
+                    }
+                    tools_list.append(tool_info)
             
-        except httpx.TimeoutException as e:
-            logger.error(f"Tool discovery timeout: {e}")
-            raise RuntimeError(f"Tool discovery timed out: {e}") from e
-        except httpx.HTTPError as e:
+            logger.info(f"Discovered {len(tools_list)} tools")
+            self._tools_cache = tools_list
+            return tools_list
+            
+        except Exception as e:
             logger.error(f"Tool discovery failed: {e}")
             raise RuntimeError(f"Tool discovery failed: {e}") from e
 
-    async def get_cached_tools(self) -> Optional[dict[str, Any]]:
+    async def get_cached_tools(self) -> Optional[list[dict[str, Any]]]:
         """Get cached tools from last discovery."""
         return self._tools_cache
 
@@ -92,34 +92,32 @@ class MCPClient:
         """
         try:
             logger.info(f"Invoking tool: {tool_name}")
-            client = await self._get_client()
+            session = await self._get_session()
             
-            payload = {
-                "method": "tools/call",
-                "params": {
-                    "name": tool_name,
-                    "arguments": arguments,
-                },
-            }
+            # Call tool using MCP protocol
+            result = await session.call_tool(tool_name, arguments)
             
-            response = await client.post(
-                f"{self.server_url}/_mcp/messages",
-                json=payload,
-            )
-            response.raise_for_status()
+            if result.isError:
+                raise RuntimeError(f"Tool call returned error: {result.content}")
             
-            result = response.json()
             logger.info(f"Tool invocation successful: {tool_name}")
-            return result
             
-        except httpx.TimeoutException as e:
-            logger.error(f"Tool invocation timeout: {tool_name}")
-            raise RuntimeError(f"Tool invocation timed out: {e}") from e
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Tool invocation failed: {tool_name} - {e.response.status_code}")
-            raise RuntimeError(
-                f"Tool invocation failed: {e.response.status_code}"
-            ) from e
+            # Extract content from result
+            if hasattr(result, 'content') and result.content:
+                # Get first content item if it's a list
+                if isinstance(result.content, list) and len(result.content) > 0:
+                    content = result.content[0]
+                    if hasattr(content, 'text'):
+                        import json
+                        try:
+                            return json.loads(content.text)
+                        except json.JSONDecodeError:
+                            return {"result": content.text}
+                    return content
+                return result.content
+            
+            return {}
+            
         except Exception as e:
             logger.error(f"Tool invocation error: {tool_name} - {e}")
             raise RuntimeError(f"Tool invocation failed: {e}") from e
@@ -154,21 +152,19 @@ class MCPClient:
             True if server is healthy.
         """
         try:
-            client = await self._get_client()
-            response = await client.get(
-                f"{self.server_url}/health/ready",
-                timeout=5.0,
-            )
-            return response.status_code == 200
+            session = await self._get_session()
+            # Try to list tools as a health check
+            await session.list_tools()
+            return True
         except Exception as e:
             logger.warning(f"Health check failed: {e}")
             return False
 
     async def close(self) -> None:
-        """Close HTTP client."""
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        """Close MCP client session."""
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
 
 
 # Global client instance

@@ -26,9 +26,8 @@ This MCP Server provides:
 │  • list_tickets(status, skip, limit)                     │
 │  • query_data(dataset, filters, limit)                   │
 │                                                             │
-│  Health Endpoints:                                         │
-│  • GET /health/live (K8s liveness probe)                 │
-│  • GET /health/ready (K8s readiness probe)               │
+│  Health Endpoint:                                          │
+│  • GET /health (K8s probe - built-in FastMCP transport) │
 │                                                             │
 │  Authentication:                                           │
 │  • Azure Workload Identity (in AKS)                       │
@@ -83,16 +82,15 @@ LOG_LEVEL="DEBUG"
 ### 3. Run Server
 
 ```bash
-python -m uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+python -m src.main
 ```
 
-Server will be available at `http://localhost:8000`
+Server will be available at `http://localhost:3333` (FastMCP HTTP transport)
 
-### 4. Test Health Endpoints
+### 4. Test Health Endpoint
 
 ```bash
-curl http://localhost:8000/health/live
-curl http://localhost:8000/health/ready
+curl http://localhost:3333/health
 ```
 
 ### 5. Run Tests
@@ -119,7 +117,7 @@ docker build -t mcp-server:latest .
 ### Run Container
 
 ```bash
-docker run -p 8000:8000 \
+docker run -p 3333:3333 \
   -e AZURE_TENANT_ID="your-tenant-id" \
   -e AZURE_CLIENT_ID="your-client-id" \
   -e AZURE_CLIENT_SECRET="your-client-secret" \
@@ -184,8 +182,8 @@ kubectl get svc -n mcp-system
 kubectl logs -n mcp-system -l app.kubernetes.io/name=mcp-server --tail=100 -f
 
 # Test health probes
-kubectl port-forward -n mcp-system svc/mcp-server 8000:8000
-curl http://localhost:8000/health/ready
+kubectl port-forward -n mcp-system svc/mcp-server 3333:3333
+curl http://localhost:3333/health
 ```
 
 ### Scale Deployment
@@ -303,28 +301,15 @@ Query data from datasets.
 - `rows`: Number of rows returned
 - `data`: Query results array
 
-## Health Probes
+## Health Probe
 
-### Liveness Probe (`/health/live`)
+### Health Endpoint (`/health`)
 
-Kubernetes uses this to determine if the pod process is alive.
+Built-in to FastMCP HTTP transport. Kubernetes uses this to determine if the pod is healthy and ready to accept traffic.
 
-- **Endpoint**: `GET /health/live`
-- **Response**: `{"status": "alive", "timestamp": "...", "service_version": "1.0.0"}`
-- **K8s Config**: Checked every 30 seconds after 10s delay
-
-### Readiness Probe (`/health/ready`)
-
-Kubernetes uses this to determine if the pod is ready to accept traffic.
-
-Checks:
-1. FastMCP server initialized
-2. Azure AD token acquisition successful
-3. Backend service health (optional, configured via `READINESS_CHECK_BACKEND`)
-
-- **Endpoint**: `GET /health/ready`
-- **Response**: `{"status": "ready", "timestamp": "...", "dependencies": {...}}`
-- **K8s Config**: Checked every 10 seconds after 5s delay
+- **Endpoint**: `GET /health`
+- **Response**: `{"status": "ok"}`
+- **K8s Config**: Liveness and Readiness probes both use `/health` endpoint
 
 ## Authentication Flow
 
@@ -410,8 +395,8 @@ kubectl get serviceaccount -n mcp-system mcp-server -o yaml
 # Check environment variables
 kubectl exec -n mcp-system <pod-name> -- env | grep AZURE
 
-# Test token acquisition
-kubectl exec -n mcp-system <pod-name> -- curl -s http://localhost:8000/health/ready
+# Test health endpoint
+kubectl exec -n mcp-system <pod-name> -- curl -s http://localhost:3333/health
 ```
 
 ### High Memory Usage

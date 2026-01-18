@@ -1,15 +1,15 @@
 # MCP Client
 
-Production-grade MCP Client consuming tools from a FastMCP Server, with Azure Workload Identity authentication and contract-based testing.
+Production-grade MCP Client consuming tools from a FastMCP Server using the FastMCP client SDK, with contract-based testing.
 
 ## Overview
 
 This MCP Client provides:
 
+- **FastMCP Client SDK**: Uses native FastMCP client for communication with MCP Server
 - **Tool Discovery**: Automatically discovers MCP tools from the server
 - **Typed Tool Invocation**: Invokes tools with full type safety
 - **Contract Testing**: Validates client-server compatibility
-- **Azure Workload Identity**: Secure credential-less authentication in AKS
 - **Error Handling**: Comprehensive error handling and retries
 
 ## Local Development
@@ -19,7 +19,7 @@ This MCP Client provides:
 ```bash
 cd mcp-client
 python -m venv venv
-source venv/bin/activate
+source venv/activate
 pip install -r requirements-dev.txt
 ```
 
@@ -28,11 +28,8 @@ pip install -r requirements-dev.txt
 Create `.env`:
 
 ```bash
-MCP_SERVER_URL="http://localhost:8000"
+MCP_SERVER_URL="http://localhost:3333"
 LOG_LEVEL="DEBUG"
-AZURE_TENANT_ID="your-tenant-id"
-AZURE_CLIENT_ID="your-client-id"
-AZURE_CLIENT_SECRET="your-secret"  # For local dev only
 ```
 
 ### Run Client
@@ -59,7 +56,7 @@ python
 pytest tests/ -v --cov=src
 
 # Contract tests (requires MCP Server running)
-MCP_SERVER_URL=http://localhost:8000 pytest tests/contract/ -v
+MCP_SERVER_URL=http://localhost:3333 pytest tests/contract/ -v
 
 # All tests
 pytest tests/ -v
@@ -76,19 +73,11 @@ docker build -t mcp-client:latest .
 ### Run
 
 ```bash
-docker run -e MCP_SERVER_URL=http://mcp-server:8000 \
-           -e AZURE_TENANT_ID=xxx \
-           -e AZURE_CLIENT_ID=xxx \
+docker run -e MCP_SERVER_URL=http://mcp-server:3333 \
            mcp-client:latest
 ```
 
 ## Kubernetes Deployment
-
-### Prerequisites
-
-Same as MCP Server:
-- AKS cluster with Workload Identity enabled
-- UAMI with federated credentials configured
 
 ### Deploy with Helm
 
@@ -96,9 +85,7 @@ Same as MCP Server:
 helm install mcp-client ./helm/mcp-client-chart \
   --namespace mcp-system \
   --create-namespace \
-  --set azure.clientId=$UAMI_ID \
-  --set azure.tenantId=$(az account show --query tenantId -o tsv) \
-  --set app.mcpServerUrl=http://mcp-server:8000
+  --set app.mcpServerUrl=http://mcp-server:3333
 ```
 
 ### Verify
@@ -212,25 +199,22 @@ except ServiceError as e:
 | `LOG_LEVEL` | Logging level | `INFO` |
 | `REQUEST_TIMEOUT` | HTTP request timeout (seconds) | `30` |
 | `DISCOVERY_TIMEOUT` | Tool discovery timeout (seconds) | `10` |
-| `AZURE_TENANT_ID` | Azure AD tenant ID | - |
-| `AZURE_CLIENT_ID` | UAMI/SPN client ID | - |
-| `AZURE_CLIENT_SECRET` | SPN secret (local dev only) | - |
 
-## Azure Workload Identity
+## FastMCP Client Protocol
 
-The client uses the same Azure auth abstraction as the server:
+The client uses FastMCP's built-in client SDK to communicate with the server via the standard MCP protocol over HTTP (Server-Sent Events transport).
 
-1. **In AKS**: Uses Workload Identity with OIDC token exchange
-2. **Local Dev**: Falls back to Service Principal (environment variables)
-
-### Token Acquisition Flow
+### Connection Flow
 
 ```
-Client Pod (AKS)
-  ↓ (has K8s service account token)
-K8s Workload Identity Webhook
-  ↓ (projects token to /var/run/secrets/azure/tokens/token)
-WorkloadIdentityCredential
+MCP Client
+  ↓ (FastMCP ClientSession)
+SSE Transport
+  ↓ (HTTP)
+MCP Server (FastMCP HTTP transport on port 3333)
+  ↓ (tool discovery/invocation)
+Backend Service
+```
   ↓ (exchanges K8s JWT for Azure AD access token)
 Azure AD
   ↓ (returns access token)
@@ -273,28 +257,28 @@ kubectl logs -n mcp-system <client-pod> -f
 # Increase timeout
 DISCOVERY_TIMEOUT=30 python -m src.main
 
-# Check server tool registration
-curl http://mcp-server:8000/_mcp/tools
+# Check server is running and accessible
+curl http://mcp-server:3333/health
 ```
 
-### Authentication fails
+### Cannot connect to server
 
 ```bash
-# Check if running in AKS
-env | grep AZURE
+# Verify server URL is correct
+MCP_SERVER_URL=http://mcp-server:3333 python -m src.main
 
-# Verify service account token exists
-kubectl exec <pod> -- ls -la /var/run/secrets/azure/tokens/
+# Check if server is running
+curl http://mcp-server:3333/health
 
-# Test token acquisition
-kubectl exec <pod> -- python -c "from src.auth import get_access_token; import asyncio; print(asyncio.run(get_access_token()))"
+# Test from pod
+kubectl exec -n mcp-system <client-pod> -- curl http://mcp-server:3333/health
 ```
 
 ## Contributing
 
 1. Make changes
 2. Run: `pytest tests/ -v --cov=src`
-3. Run contract tests: `MCP_SERVER_URL=http://localhost:8000 pytest tests/contract/ -v`
+3. Run contract tests: `MCP_SERVER_URL=http://localhost:3333 pytest tests/contract/ -v`
 4. Submit MR
 
 ## License

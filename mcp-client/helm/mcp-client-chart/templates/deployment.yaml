@@ -15,7 +15,9 @@ spec:
   template:
     metadata:
       annotations:
-        {{- toYaml .Values.podAnnotations | nindent 8 }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       labels:
         {{- include "mcp-client.selectorLabels" . | nindent 8 }}
     spec:
@@ -31,25 +33,12 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "mcp-client.fullname" . }}-config
-          env:
-            - name: AZURE_FEDERATED_TOKEN_FILE
-              value: /var/run/secrets/azure/tokens/token
           volumeMounts:
-            - name: azure-identity-token
-              mountPath: /var/run/secrets/azure/tokens
-              readOnly: true
             - name: tmp
               mountPath: /tmp
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
-        - name: azure-identity-token
-          projected:
-            sources:
-              - serviceAccountToken:
-                  audience: api://AzureADTokenExchange
-                  expirationSeconds: 3600
-                  path: token
         - name: tmp
           emptyDir: {}
       {{- with .Values.nodeSelector }}
