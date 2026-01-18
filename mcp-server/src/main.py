@@ -1,6 +1,8 @@
 """FastMCP Server with health probes and Azure Workload Identity support."""
+import json
 import logging
 from datetime import datetime
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastmcp import FastMCP
@@ -152,10 +154,12 @@ async def readiness_probe() -> HealthResponse:
 
     try:
         # Check 1: FastMCP tools registered
-        # Note: FastMCP doesn't expose tools() method; we'll use a different approach
         logger.debug("Checking FastMCP initialization...")
-        # FastMCP is initialized if this endpoint is reachable
+        registered_tools = mcp_server.list_tools()
+        if not registered_tools:
+            raise RuntimeError("No MCP tools registered")
         dependencies["mcp_server"] = "healthy"
+        logger.debug(f"FastMCP initialized with {len(registered_tools)} tools")
 
         # Check 2: Azure AD authentication
         logger.debug("Validating Azure AD authentication...")
@@ -196,26 +200,142 @@ async def health() -> dict:
 
 
 # ============================================================================
-# FastMCP HTTP Transport
+# MCP HTTP Transport & Tool Discovery
 # ============================================================================
 
 
-# Mount FastMCP server on FastAPI
-@app.post("/_mcp/messages")
-async def mcp_messages(message: dict) -> dict:
+@app.get("/_mcp/tools")
+async def discover_tools() -> dict[str, Any]:
     """
-    MCP message endpoint for HTTP transport.
+    Discover available MCP tools.
+    
+    Returns:
+        Dictionary with list of available tools and their schemas.
+    """
+    try:
+        logger.info("Tool discovery request received")
+        tools_list = mcp_server.list_tools()
+        
+        tools_data = []
+        for tool in tools_list:
+            tool_info = {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema if hasattr(tool, "input_schema") else {},
+            }
+            tools_data.append(tool_info)
+        
+        logger.info(f"Discovered {len(tools_data)} tools")
+        return {
+            "tools": tools_data,
+            "total": len(tools_data),
+        }
+    except Exception as e:
+        logger.error(f"Tool discovery failed: {e}")
+        raise HTTPException(status_code=500, detail="Tool discovery failed") from e
+
+
+@app.post("/_mcp/messages")
+async def mcp_messages(message: dict[str, Any]) -> dict[str, Any]:
+    """
+    Handle MCP protocol messages for HTTP transport.
+    
+    Supports:
+    - tools/call: Invoke a tool with arguments
+    - tools/list: List available tools
     
     Args:
-        message: MCP message payload.
+        message: MCP message payload with method and params.
         
     Returns:
-        MCP response.
+        MCP response envelope with result or error.
+        
+    Raises:
+        HTTPException: If message handling fails.
     """
-    # FastMCP handles HTTP transport internally
-    # This is a placeholder for FastMCP integration
-    logger.info(f"MCP message received: {message.get('method', 'unknown')}")
-    return {"status": "ok"}
+    try:
+        method = message.get("method", "").strip()
+        params = message.get("params", {})
+        
+        logger.info(f"MCP message: method={method}")
+        
+        # Handle tools/list
+        if method == "tools/list":
+            tools_list = mcp_server.list_tools()
+            tools_data = [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema if hasattr(tool, "input_schema") else {},
+                }
+                for tool in tools_list
+            ]
+            return {
+                "method": method,
+                "result": {
+                    "tools": tools_data,
+                },
+            }
+        
+        # Handle tools/call
+        elif method == "tools/call":
+            tool_name = params.get("name", "").strip()
+            arguments = params.get("arguments", {})
+            
+            if not tool_name:
+                raise ValueError("Missing required parameter: 'name'")
+            
+            logger.info(f"Invoking tool: {tool_name}")
+            
+            # Find and invoke the tool
+            tools_list = mcp_server.list_tools()
+            tool = next((t for t in tools_list if t.name == tool_name), None)
+            
+            if not tool:
+                raise ValueError(f"Tool not found: {tool_name}")
+            
+            # Call the tool implementation
+            try:
+                # Get the tool function from mcp_server's registry
+                tool_func = getattr(mcp_server, f"_tool_{tool_name}", None)
+                if not tool_func:
+                    # Fallback: try to find in registered tools
+                    # FastMCP stores tools in internal structure
+                    logger.warning(f"Tool function not found in registry: {tool_name}")
+                    raise ValueError(f"Tool implementation not found: {tool_name}")
+                
+                result = await tool_func(**arguments)
+                
+                logger.info(f"Tool execution successful: {tool_name}")
+                return {
+                    "method": method,
+                    "result": result,
+                }
+            except TypeError as e:
+                logger.error(f"Tool invocation argument error: {e}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid arguments for tool '{tool_name}': {str(e)}",
+                ) from e
+            except Exception as e:
+                logger.error(f"Tool execution failed: {tool_name} - {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Tool execution failed: {str(e)}",
+                ) from e
+        
+        else:
+            logger.warning(f"Unknown MCP method: {method}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown MCP method: {method}",
+            )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"MCP message handling error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 # ============================================================================
@@ -229,6 +349,15 @@ async def startup() -> None:
     logger.info("MCP Server starting up...")
     logger.info(f"Backend API: {settings.server.backend_api_url}")
     logger.info(f"Log level: {settings.server.log_level}")
+    
+    # Log registered tools
+    try:
+        tools_list = mcp_server.list_tools()
+        logger.info(f"Registered {len(tools_list)} MCP tools:")
+        for tool in tools_list:
+            logger.info(f"  - {tool.name}: {tool.description}")
+    except Exception as e:
+        logger.warning(f"Could not list tools during startup: {e}")
 
 
 @app.on_event("shutdown")
