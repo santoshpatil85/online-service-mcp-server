@@ -365,10 +365,10 @@ python -m uvicorn src.main:app --reload
 
 ### Documentation
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) - System design, auth flows, patterns
-- [`AKS_DEPLOYMENT_GUIDE.md`](AKS_DEPLOYMENT_GUIDE.md) - Step-by-step deployment
-- [`README.md`](README.md) - Project overview and quick start
-- [`mcp-server/README.md`](mcp-server/README.md) - Server-specific docs
+- [`mcp-server/README.md`](mcp-server/README.md) - Server-specific docs and deployment guide
+- [`mcp-server/AKS_DEPLOYMENT_GUIDE.md`](mcp-server/AKS_DEPLOYMENT_GUIDE.md) - Detailed AKS deployment steps
 - [`mcp-client/README.md`](mcp-client/README.md) - Client-specific docs
+- [`mcp-client/AKS_DEPLOYMENT_GUIDE.md`](mcp-client/AKS_DEPLOYMENT_GUIDE.md) - Client AKS deployment
 
 ### Configuration
 - [`mcp-server/src/config.py`](mcp-server/src/config.py) - Server settings
