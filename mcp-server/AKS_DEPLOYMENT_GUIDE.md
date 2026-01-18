@@ -1,6 +1,6 @@
-# AKS Deployment Guide: Azure Workload Identity Setup
+# AKS Deployment Guide: MCP Server with Azure Workload Identity
 
-This guide provides step-by-step instructions for deploying the MCP Server and Client to Azure Kubernetes Service (AKS) with Azure Workload Identity.
+This guide provides step-by-step instructions for deploying the MCP Server to Azure Kubernetes Service (AKS) with Azure Workload Identity.
 
 ## Prerequisites
 
@@ -8,7 +8,7 @@ This guide provides step-by-step instructions for deploying the MCP Server and C
 - AKS cluster with Workload Identity enabled (version 1.28+)
 - kubectl configured to access your AKS cluster
 - Helm 3.0+
-- Docker images pushed to ACR/GitLab Registry
+- Docker image pushed to ACR/GitLab Registry
 
 ### Verify AKS Workload Identity is Enabled
 
@@ -35,7 +35,7 @@ az aks update -g <resource-group> -n <cluster-name> \
 # Set variables
 RG="<resource-group>"
 CLUSTER_NAME="<cluster-name>"
-UAMI_NAME="mcp-system-uami"
+UAMI_NAME="mcp-server-uami"
 
 # Create UAMI
 az identity create \
@@ -55,7 +55,7 @@ echo "TENANT_ID=$TENANT_ID"
 
 ## Step 2: Assign Azure Roles
 
-Assign minimal required roles to the UAMI:
+Assign minimal required roles to the UAMI for accessing backend services:
 
 ```bash
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
@@ -63,13 +63,6 @@ SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 # Reader role on subscription (adjust scope as needed)
 az role assignment create \
   --role Reader \
-  --assignee $UAMI_OBJECT_ID \
-  --scope /subscriptions/$SUBSCRIPTION_ID
-
-# (Optional) Custom role for specific permissions
-# Create custom role with only required permissions
-az role assignment create \
-  --role "Resource Reader" \
   --assignee $UAMI_OBJECT_ID \
   --scope /subscriptions/$SUBSCRIPTION_ID
 ```
@@ -91,10 +84,9 @@ AKS_OIDC_ISSUER=$(az aks show -g $RG -n $CLUSTER_NAME \
 echo "AKS_OIDC_ISSUER=$AKS_OIDC_ISSUER"
 ```
 
-Create federated credentials for each service account:
+Create federated credential for MCP Server:
 
 ```bash
-# For MCP Server
 az identity federated-identity-credential create \
   --resource-group $RG \
   --identity-name $UAMI_NAME \
@@ -102,26 +94,18 @@ az identity federated-identity-credential create \
   --issuer $AKS_OIDC_ISSUER \
   --subject system:serviceaccount:mcp-system:mcp-server \
   --audience api://AzureADTokenExchange
-
-# For MCP Client
-az identity federated-identity-credential create \
-  --resource-group $RG \
-  --identity-name $UAMI_NAME \
-  --name mcp-client-credential \
-  --issuer $AKS_OIDC_ISSUER \
-  --subject system:serviceaccount:mcp-system:mcp-client \
-  --audience api://AzureADTokenExchange
 ```
 
-Verify credentials created:
+Verify credential created:
 
 ```bash
-az identity federated-identity-credential list \
+az identity federated-identity-credential show \
   --resource-group $RG \
-  --identity-name $UAMI_NAME
+  --identity-name $UAMI_NAME \
+  --name mcp-server-credential
 ```
 
-## Step 5: Deploy MCP Server
+## Step 5: Deploy MCP Server with Helm
 
 Create values file `mcp-server-values.yaml`:
 
@@ -163,7 +147,7 @@ resources:
 Deploy:
 
 ```bash
-helm install mcp-server mcp-server/helm/mcp-server-chart \
+helm install mcp-server ./helm/mcp-server-chart \
   --namespace mcp-system \
   --values mcp-server-values.yaml \
   --wait \
@@ -177,67 +161,16 @@ Verify:
 kubectl get pods -n mcp-system -l app.kubernetes.io/name=mcp-server
 
 # Check service
-kubectl get svc -n mcp-system
+kubectl get svc -n mcp-system -l app.kubernetes.io/name=mcp-server
 
 # Check logs
 kubectl logs -n mcp-system -l app.kubernetes.io/name=mcp-server --tail=50
 
-# Test readiness
-kubectl exec -n mcp-system <pod-name> -- curl -s http://localhost:8000/health/ready
+# Test health
+kubectl exec -n mcp-system <pod-name> -- curl -s http://localhost:3333/health
 ```
 
-## Step 6: Deploy MCP Client
-
-Create values file `mcp-client-values.yaml`:
-
-```yaml
-azure:
-  tenantId: "<TENANT_ID>"
-  clientId: "<UAMI_ID>"
-
-image:
-  repository: "<registry>.azurecr.io/mcp-client"
-  tag: "1.0.0"
-
-app:
-  logLevel: "INFO"
-  mcpServerUrl: "http://mcp-server:8000"
-
-replicaCount: 1
-
-autoscaling:
-  enabled: true
-  minReplicas: 1
-  maxReplicas: 5
-  targetCPUUtilizationPercentage: 75
-
-resources:
-  requests:
-    cpu: "100m"
-    memory: "128Mi"
-  limits:
-    cpu: "500m"
-    memory: "512Mi"
-```
-
-Deploy:
-
-```bash
-helm install mcp-client mcp-client/helm/mcp-client-chart \
-  --namespace mcp-system \
-  --values mcp-client-values.yaml \
-  --wait \
-  --timeout 5m
-```
-
-Verify:
-
-```bash
-kubectl get pods -n mcp-system -l app.kubernetes.io/name=mcp-client
-kubectl logs -n mcp-system -l app.kubernetes.io/name=mcp-client -f
-```
-
-## Step 7: Verify Workload Identity
+## Step 6: Verify Workload Identity
 
 Check that Workload Identity is working:
 
@@ -258,37 +191,38 @@ kubectl get pod -n mcp-system $SERVER_POD -o yaml | grep azure.workload.identity
 kubectl exec -n mcp-system $SERVER_POD -- ls -la /var/run/secrets/azure/tokens/
 ```
 
-## Step 8: Test End-to-End
+## Step 7: Test Server Health and Tools
 
 ### Test Server Health
 
 ```bash
 # Port-forward to server
-kubectl port-forward -n mcp-system svc/mcp-server 8000:8000 &
+kubectl port-forward -n mcp-system svc/mcp-server 3333:3333 &
 
-# Test health
-curl http://localhost:8000/health/live
-curl http://localhost:8000/health/ready
+# Test health endpoint
+curl http://localhost:3333/health
 
-# Test a tool (if backend is accessible)
-curl -X POST http://localhost:8000/_mcp/messages \
+# Test tool discovery
+curl http://localhost:3333/tools
+
+# Call a tool
+curl -X POST http://localhost:3333/messages \
   -H "Content-Type: application/json" \
-  -d '{"method":"tools/call","params":{"name":"get_user_profile","arguments":{"user_id":"123"}}}'
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "get_user_profile",
+      "arguments": {"user_id": "123"}
+    }
+  }'
 
 # Stop port-forward
 pkill -f "kubectl port-forward"
 ```
 
-### Test Client Discovery
-
-```bash
-# Check client logs for tool discovery
-kubectl logs -n mcp-system -l app.kubernetes.io/name=mcp-client
-
-# Expected output includes: "Discovered X tools"
-```
-
-## Step 9: Monitoring and Troubleshooting
+## Step 8: Monitoring and Troubleshooting
 
 ### Check Pod Events
 
@@ -302,11 +236,8 @@ kubectl describe pod -n mcp-system <pod-name>
 # Server logs
 kubectl logs -n mcp-system -l app.kubernetes.io/name=mcp-server -f
 
-# Client logs
-kubectl logs -n mcp-system -l app.kubernetes.io/name=mcp-client -f
-
-# Combined
-kubectl logs -n mcp-system -f --all-containers
+# With timestamps
+kubectl logs -n mcp-system -l app.kubernetes.io/name=mcp-server --timestamps=true
 ```
 
 ### Check HPA Status
@@ -333,12 +264,12 @@ kubectl describe hpa -n mcp-system mcp-server
 - Check UAMI has correct role assignments
 - Verify OIDC issuer URL in credential matches actual issuer
 
-## Step 10: Upgrade and Maintenance
+## Step 9: Upgrade and Maintenance
 
 ### Update Image
 
 ```bash
-helm upgrade mcp-server mcp-server/helm/mcp-server-chart \
+helm upgrade mcp-server ./helm/mcp-server-chart \
   --namespace mcp-system \
   --set image.tag=1.1.0 \
   --values mcp-server-values.yaml \
@@ -357,12 +288,11 @@ kubectl scale deployment mcp-server -n mcp-system --replicas=5
 kubectl get hpa -n mcp-system -w
 ```
 
-## Step 11: Cleanup
+## Step 10: Cleanup
 
 ```bash
-# Delete Helm releases
+# Delete Helm release
 helm uninstall mcp-server -n mcp-system
-helm uninstall mcp-client -n mcp-system
 
 # Delete namespace
 kubectl delete namespace mcp-system
@@ -376,7 +306,7 @@ az identity delete --name $UAMI_NAME --resource-group $RG
 ```
 ┌─────────────────────────────────────────────────────┐
 │                  Azure AD                           │
-│  (User Assigned Managed Identity: mcp-system-uami)  │
+│  (User Assigned Managed Identity: mcp-server-uami)  │
 │                                                     │
 │  Role Assignments:                                  │
 │  ├─ Reader on /subscriptions/...                   │
@@ -411,10 +341,6 @@ az identity delete --name $UAMI_NAME --resource-group $RG
 │  │        ▼                │ ↓ Get token     ││  │
 │  │  /var/run/secrets/      │ ↓ Cache token   ││  │
 │  │   azure/tokens/token    └─────────────────┘│  │
-│  └────────────────────────────────────────────┘  │
-│                                                   │
-│  ┌────────────────────────────────────────────┐  │
-│  │     MCP Client Pod (same setup)            │  │
 │  └────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────┘
 ```
